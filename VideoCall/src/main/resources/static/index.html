@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Video Call App</title>
+</head>
+<body>
+  <h2>Video Call App</h2>
+
+  <video id="localVideo" autoplay playsinline muted width="400"></video>
+  <video id="remoteVideo" autoplay playsinline width="400"></video><br>
+
+  <button onclick="startCall()">Start Call</button>
+
+  <script src="https://cdn.jsdelivr.net/npm/sockjs-client@1/dist/sockjs.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/stompjs@2.3.3/lib/stomp.min.js"></script>
+
+  <script>
+    let stompClient = null;
+    let peerConnection = null;
+    let localStream = null;
+
+    const servers = {
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' }
+      ]
+    };
+
+    connectWebSocket();
+
+    function connectWebSocket() {
+      const socket = new SockJS('/video-call');
+      stompClient = Stomp.over(socket);
+
+      stompClient.connect({}, function () {
+        console.log("Connected to WebSocket");
+
+        stompClient.subscribe('/user/topic/call', function (message) {
+          const signal = JSON.parse(message.body);
+
+          if (signal.offer) {
+            console.log("Received Offer");
+            handleOffer(signal.offer);
+          } else if (signal.answer) {
+            console.log("Received Answer");
+            handleAnswer(signal.answer);
+          } else if (signal.candidate) {
+            console.log("Received ICE Candidate");
+            handleCandidate(signal.candidate);
+          }
+        });
+      });
+    }
+
+    async function startCall() {
+      localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      document.getElementById('localVideo').srcObject = localStream;
+
+      peerConnection = new RTCPeerConnection(servers);
+
+      localStream.getTracks().forEach(track => {
+        peerConnection.addTrack(track, localStream);
+      });
+
+      peerConnection.ontrack = (event) => {
+        document.getElementById('remoteVideo').srcObject = event.streams[0];
+      };
+
+      peerConnection.onicecandidate = (event) => {
+        if (event.candidate) {
+          stompClient.send("/app/call", {}, JSON.stringify({ candidate: event.candidate }));
+        }
+      };
+
+      const offer = await peerConnection.createOffer();
+      await peerConnection.setLocalDescription(offer);
+
+      stompClient.send("/app/call", {}, JSON.stringify({ offer: offer }));
+    }
+
+    async function handleOffer(offer) {
+      localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      document.getElementById('localVideo').srcObject = localStream;
+
+      peerConnection = new RTCPeerConnection(servers);
+
+      localStream.getTracks().forEach(track => {
+        peerConnection.addTrack(track, localStream);
+      });
+
+      peerConnection.ontrack = (event) => {
+        document.getElementById('remoteVideo').srcObject = event.streams[0];
+      };
+
+      peerConnection.onicecandidate = (event) => {
+        if (event.candidate) {
+          stompClient.send("/app/call", {}, JSON.stringify({ candidate: event.candidate }));
+        }
+      };
+
+      await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+      const answer = await peerConnection.createAnswer();
+      await peerConnection.setLocalDescription(answer);
+
+      stompClient.send("/app/call", {}, JSON.stringify({ answer: answer }));
+    }
+
+    async function handleAnswer(answer) {
+      await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+    }
+
+    function handleCandidate(candidate) {
+      peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+    }
+  </script>
+</body>
+</html>
